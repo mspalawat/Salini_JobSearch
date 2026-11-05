@@ -3,6 +3,78 @@
 Everything needed to produce one complete job application in a few minutes: a one-page resume matched
 to the role, a cover letter, an email draft, notes, and a row in the application tracker.
 
+## Quick start, step by step
+
+Works on Mac or Windows. Fifteen minutes the first time, two minutes per job after that.
+
+**1. Install three things (once)**
+
+- Python 3.10 or newer: https://www.python.org/downloads/ (Mac already has it; check with `python3 --version`)
+- Git: https://git-scm.com/downloads (Mac: run `xcode-select --install` in Terminal)
+- Google Chrome, for the PDFs
+
+**2. Get the folder (once)**
+
+Open Terminal (Mac) or PowerShell (Windows) and run:
+
+```bash
+git clone https://github.com/mspalawat/Salini_JobSearch.git
+cd Salini_JobSearch
+```
+
+**3. Pick a way to write**
+
+- *No key, browser chat:* skip to step 4, use Way 2 below.
+- *Terminal with a free key:* copy `.env.example` to `.env`, open `.env` in any text editor, paste a
+  Gemini key from https://aistudio.google.com/apikey after `GEMINI_API_KEY=`. Use Way 1.
+
+**4. Build an application**
+
+Way 2 (browser chat): open ChatGPT, Gemini or Claude. Upload `facts.md`, paste `AI_KICKOFF.md`,
+send the job description. Copy the block it returns, then in Terminal:
+
+```bash
+python3 apply_paste.py
+```
+
+Paste the block, press Enter, type `END`, press Enter.
+
+Way 1 (terminal with key):
+
+```bash
+python3 apply.py
+```
+
+Answer the questions, paste the job description, type `END`.
+
+**5. Send**
+
+Open `applications/<Company>_<Role>/`. Read the resume PDF, cover letter PDF and `Email_*.txt` once.
+Attach the PDFs, send. If you applied through a portal, the email is a follow up to a recruiter.
+
+**6. Keep the tracker current**
+
+Open `tracker/Salini_Job_Tracker.html` in a browser to see the pipeline. To change a status
+(Applied, Interview, Offer, Rejected), edit `tracker/salini_jobs.csv` in Excel or a text editor, then run:
+
+```bash
+cd tracker && python3 build_tracker.py && cd ..
+```
+
+**7. Pull updates**
+
+When the resumes or facts change upstream:
+
+```bash
+git pull
+```
+
+If `git pull` complains about local changes, run `git stash`, then `git pull`, then `git stash pop`.
+
+---
+
+## The two programs
+
 Two ways to run it. Pick whichever fits the moment.
 
 | | `apply.py` | `apply_paste.py` |
@@ -13,10 +85,10 @@ Two ways to run it. Pick whichever fits the moment.
 | Who checks the facts | The program, automatically, with retries | The program, before building; it tells you what to send back to the chat |
 | Output | Identical | Identical |
 
-## Setup, once
+## Setup details
 
 ```bash
-git clone git@github.com:mspalawat/Salini_JobSearch.git
+git clone https://github.com/mspalawat/Salini_JobSearch.git
 cd Salini_JobSearch
 ```
 
