@@ -292,7 +292,7 @@ def content_problems(text: str, allowed: set[str]) -> list[str]:
         probs.append("numbers not in FACTS: " + ", ".join(sorted(bad)))
     if re.search(r"micron|kairos|mantike", text, re.I):
         probs.append("mentions a project that is not Salini's")
-    if re.search(r"\b(hold|holds|have|has|with|earned|completed|obtained)\s+(a|an|my)?\s*(master|m\.?sc)", text, re.I):
+    if re.search(r"\b(hold|holds|holding|have|has|having|with|earned|completed|obtained|graduated with)\s+(a|an|my)?\s*(master|m\.?sc)", text, re.I):
         probs.append("the M.Sc. is not finished: say 'completing in January 2027', never 'holds a Master's'")
     if re.search(r"\b(java|sql|power bi|vba|tableau|r\b|c\+\+)", text, re.I):
         probs.append("claims a tool that is not in FACTS")
@@ -441,13 +441,42 @@ Hard rules:
 # --------------------------------------------------------------------------- document builders
 
 
-def build_resume(variant: str, out_dir: Path, ai: AI | None, job: dict, facts: str, allowed: set[str]) -> tuple[Path, dict]:
+def write_resume(variant: str, out_dir: Path, summary: str | None = None, tag: str | None = None) -> Path:
+    """Copy the chosen variant into the application folder, swapping summary and tag when given."""
     src = VARIANTS / f"Resume_Salini_Sadangi_Broad_{variant}.html"
     doc = src.read_text(encoding="utf-8")
+    if summary:
+        esc = html.escape(americanize(summary.strip()), quote=False)
+        doc = re.sub(r'(<p class="summary">).*?(</p>)', lambda m: m.group(1) + esc + m.group(2), doc, flags=re.S)
+    if tag:
+        esc = html.escape(tag.strip(), quote=False)
+        doc = re.sub(r'(<div class="tag">).*?(</div>)', lambda m: m.group(1) + esc + m.group(2), doc)
+        doc = re.sub(r"<title>.*?</title>", f"<title>{NAME} — {esc}</title>", doc, flags=re.S)
+    out = out_dir / "Salini_Sadangi_Resume.html"
+    out.write_text(doc, encoding="utf-8")
+    return out
+
+
+def validate_summary(obj: dict, allowed: set[str]) -> list[str]:
+    probs = []
+    s, t = obj.get("summary", ""), obj.get("tag", "")
+    if not (450 <= len(s) <= 900):
+        probs.append(f"summary length {len(s)} chars, need 450 to 900")
+    probs += content_problems(s, allowed)
+    if not t or len(t) > 60:
+        probs.append("tag missing or too long")
+    if "·" not in t:
+        probs.append("tag must use the middle dot separator")
+    return probs
+
+
+def build_resume(variant: str, out_dir: Path, ai: AI | None, job: dict, facts: str, allowed: set[str]) -> tuple[Path, dict]:
     info = {"variant": variant, "summary_by": "template", "tag_by": "template"}
+    summary = tag = None
     if ai:
-        cur_summary = strip_tags(re.search(r'<p class="summary">(.*?)</p>', doc, re.S).group(1))
-        cur_tag = strip_tags(re.search(r'<div class="tag">(.*?)</div>', doc).group(1))
+        src = (VARIANTS / f"Resume_Salini_Sadangi_Broad_{variant}.html").read_text(encoding="utf-8")
+        cur_summary = strip_tags(re.search(r'<p class="summary">(.*?)</p>', src, re.S).group(1))
+        cur_tag = strip_tags(re.search(r'<div class="tag">(.*?)</div>', src).group(1))
         user = (f"FACTS:\n{facts}\n\nCURRENT RESUME SUMMARY (rewrite this, same length within 10%):\n{cur_summary}\n\n"
                 f"CURRENT HEADLINE TAG: {cur_tag}\n\nJOB: {job['role']} at {job['company']}\nTAGS: {', '.join(job['tags'])}\n"
                 f"JOB DESCRIPTION:\n{job['jd'][:6000]}\n\n"
@@ -455,30 +484,11 @@ def build_resume(variant: str, out_dir: Path, ai: AI | None, job: dict, facts: s
                 "4 to 5 sentences, 600 to 800 characters. Also give a 3 to 5 word headline tag of the form "
                 "'Field · Field · Field' using the middle dot character.\n"
                 'Return {"summary": "...", "tag": "..."}')
-
-        def validate(obj: dict) -> list[str]:
-            probs = []
-            s, t = obj.get("summary", ""), obj.get("tag", "")
-            if not (450 <= len(s) <= 900):
-                probs.append(f"summary length {len(s)} chars, need 450 to 900")
-            probs += content_problems(s, allowed)
-            if not t or len(t) > 60:
-                probs.append("tag missing or too long")
-            if "·" not in t:
-                probs.append("tag must use the middle dot separator")
-            return probs
-
-        obj = ai.json(SYSTEM_PROMPT, user, validate)
+        obj = ai.json(SYSTEM_PROMPT, user, lambda o: validate_summary(o, allowed))
         if obj:
-            summary = html.escape(americanize(obj["summary"]), quote=False)
-            tag = html.escape(obj["tag"], quote=False)
-            doc = re.sub(r'(<p class="summary">).*?(</p>)', lambda m: m.group(1) + summary + m.group(2), doc, flags=re.S)
-            doc = re.sub(r'(<div class="tag">).*?(</div>)', lambda m: m.group(1) + tag + m.group(2), doc)
-            doc = re.sub(r"<title>.*?</title>", f"<title>{NAME} — {tag}</title>", doc, flags=re.S)
+            summary, tag = obj["summary"], obj["tag"]
             info["summary_by"] = info["tag_by"] = ai.used
-    out = out_dir / "Salini_Sadangi_Resume.html"
-    out.write_text(doc, encoding="utf-8")
-    return out, info
+    return write_resume(variant, out_dir, summary, tag), info
 
 
 def template_letter(job: dict, variant: str) -> list[str]:
@@ -505,6 +515,40 @@ def template_letter(job: dict, variant: str) -> list[str]:
     ]
 
 
+def validate_letter(obj: dict, allowed: set[str]) -> list[str]:
+    probs = []
+    ps = obj.get("paragraphs")
+    if not isinstance(ps, list) or len(ps) != 4:
+        return ["need exactly 4 paragraphs"]
+    text = "\n".join(ps)
+    if not (700 <= len(text) <= 1700):
+        probs.append(f"total length {len(text)} chars, need 700 to 1700")
+    probs += content_problems(text, allowed)
+    if not re.search(r"immediate", text, re.I):
+        probs.append("availability must be stated as immediate")
+    if re.search(r"\b(dear|sincerely|regards)\b", text, re.I):
+        probs.append("no greeting or sign off inside paragraphs")
+    return probs
+
+
+def write_letter(job: dict, out_dir: Path, paragraphs: list[str], tag: str) -> Path:
+    """Render dash-free, American-spelled paragraphs into the letter template."""
+    paragraphs = [dedash(americanize(p.strip())) for p in paragraphs if p.strip()]
+    tpl = (TEMPLATES / "cover_letter.html").read_text(encoding="utf-8")
+    addressee = job["contact_name"] or f"Hiring Team, {job['company']}, Singapore"
+    greeting = f"Dear {salutation(job['contact_name'])}," if job["contact_name"] else "Dear Hiring Team,"
+    body = "\n".join(f"<p>{html.escape(p, quote=False)}</p>" for p in paragraphs)
+    today = dt.date.today()
+    date_str = today.strftime("%d %B %Y").lstrip("0")
+    doc = (tpl.replace("{{ROLE}}", html.escape(job["role"])).replace("{{COMPANY}}", html.escape(job["company"]))
+           .replace("{{TAG}}", html.escape(tag, quote=False)).replace("{{DATE}}", date_str)
+           .replace("{{ADDRESSEE}}", html.escape(addressee)).replace("{{GREETING}}", html.escape(greeting))
+           .replace("{{PARAGRAPHS}}", body))
+    out = out_dir / f"CoverLetter_Salini_Sadangi_{slug(job['company'])}.html"
+    out.write_text(doc, encoding="utf-8")
+    return out
+
+
 def build_letter(job: dict, variant: str, out_dir: Path, ai: AI | None, facts: str, allowed: set[str], tag: str) -> tuple[Path, str]:
     paragraphs = template_letter(job, variant)
     by = "template"
@@ -517,37 +561,10 @@ def build_letter(job: dict, variant: str, out_dir: Path, ai: AI | None, facts: s
                 "Paragraph 3: the SME experience and the tools and certifications that matter for this job. "
                 "Paragraph 4: a specific close offering to walk through the models or memoranda on a call, then thanks.\n"
                 'Return {"paragraphs": ["...", "...", "...", "..."]}')
-
-        def validate(obj: dict) -> list[str]:
-            probs = []
-            ps = obj.get("paragraphs")
-            if not isinstance(ps, list) or len(ps) != 4:
-                return ["need exactly 4 paragraphs"]
-            text = "\n".join(ps)
-            if not (700 <= len(text) <= 1700):
-                probs.append(f"total length {len(text)} chars, need 700 to 1700")
-            probs += content_problems(text, allowed)
-            if not re.search(r"immediate", text, re.I):
-                probs.append("availability must be stated as immediate")
-            if re.search(r"\b(dear|sincerely|regards)\b", text, re.I):
-                probs.append("no greeting or sign off inside paragraphs")
-            return probs
-
-        obj = ai.json(SYSTEM_PROMPT, user, validate)
+        obj = ai.json(SYSTEM_PROMPT, user, lambda o: validate_letter(o, allowed))
         if obj:
-            paragraphs = [dedash(americanize(p.strip())) for p in obj["paragraphs"]]
-            by = ai.used
-    tpl = (TEMPLATES / "cover_letter.html").read_text(encoding="utf-8")
-    addressee = job["contact_name"] or f"Hiring Team, {job['company']}, Singapore"
-    greeting = f"Dear {salutation(job['contact_name'])}," if job["contact_name"] else "Dear Hiring Team,"
-    body = "\n".join(f"<p>{html.escape(p, quote=False)}</p>" for p in paragraphs)
-    doc = (tpl.replace("{{ROLE}}", html.escape(job["role"])).replace("{{COMPANY}}", html.escape(job["company"]))
-           .replace("{{TAG}}", tag).replace("{{DATE}}", dt.date.today().strftime("%-d %B %Y") if os.name != "nt" else dt.date.today().strftime("%d %B %Y"))
-           .replace("{{ADDRESSEE}}", html.escape(addressee)).replace("{{GREETING}}", html.escape(greeting))
-           .replace("{{PARAGRAPHS}}", body))
-    out = out_dir / f"CoverLetter_Salini_Sadangi_{slug(job['company'])}.html"
-    out.write_text(doc, encoding="utf-8")
-    return out, by
+            paragraphs, by = obj["paragraphs"], ai.used
+    return write_letter(job, out_dir, paragraphs, tag), by
 
 
 def template_email(job: dict) -> tuple[str, str]:
@@ -569,6 +586,35 @@ def template_email(job: dict) -> tuple[str, str]:
     return subject, body
 
 
+def validate_email(obj: dict, allowed: set[str]) -> list[str]:
+    probs = []
+    s, b = obj.get("subject", ""), obj.get("body", "")
+    if not s or len(s) > 90:
+        probs.append("subject missing or over 90 chars")
+    words = len(b.split())
+    if not (70 <= words <= 200):
+        probs.append(f"body is {words} words, need 70 to 200")
+    probs += content_problems(b, allowed)
+    if not re.search(r"immediate", b, re.I):
+        probs.append("availability must be stated as immediate")
+    return probs
+
+
+def write_email(job: dict, out_dir: Path, subject: str, body: str) -> Path:
+    subject = dedash(americanize(subject.strip()))
+    body = dedash(americanize(body.strip()))
+    body = re.sub(r"\n+\s*Salini Sadangi\s*$", "", body).rstrip()
+    if "+65 9357 4381" not in body:
+        body += f"\nSalini Sadangi\n+65 9357 4381 · {EMAIL}\nhttps://saliniportfolionextjs.vercel.app"
+    to = job["contact_email"] or ""
+    mailto = f"mailto:{to}?" + urllib.parse.urlencode({"subject": subject, "body": body}, quote_via=urllib.parse.quote)
+    out = out_dir / f"Email_{slug(job['company'])}.txt"
+    out.write_text(f"To: {to or '[add recipient]'}\nSubject: {subject}\n\n{body}\n\n"
+                   f"---\nAttach: Salini_Sadangi_Resume.pdf" + (", CoverLetter PDF" if job["mode"] == "direct" else "") +
+                   f"\nOpen in your mail app (copy into the address bar):\n{mailto}\n", encoding="utf-8")
+    return out
+
+
 def build_email(job: dict, out_dir: Path, ai: AI | None, facts: str, allowed: set[str]) -> tuple[Path, str]:
     subject, body = template_email(job)
     by = "template"
@@ -581,34 +627,10 @@ def build_email(job: dict, out_dir: Path, ai: AI | None, facts: str, allowed: se
                 "'Kind regards,' then the name only (contact lines are added by the program). Mention availability is immediate. "
                 "Subject line under 80 characters.\n"
                 'Return {"subject": "...", "body": "..."}')
-
-        def validate(obj: dict) -> list[str]:
-            probs = []
-            s, b = obj.get("subject", ""), obj.get("body", "")
-            if not s or len(s) > 90:
-                probs.append("subject missing or over 90 chars")
-            words = len(b.split())
-            if not (70 <= words <= 200):
-                probs.append(f"body is {words} words, need 70 to 200")
-            probs += content_problems(b, allowed)
-            if not re.search(r"immediate", b, re.I):
-                probs.append("availability must be stated as immediate")
-            return probs
-
-        obj = ai.json(SYSTEM_PROMPT, user, validate)
+        obj = ai.json(SYSTEM_PROMPT, user, lambda o: validate_email(o, allowed))
         if obj:
-            subject = dedash(americanize(obj["subject"].strip()))
-            body = dedash(americanize(obj["body"].strip()))
-            body = re.sub(r"\n+\s*Salini Sadangi\s*$", "", body).rstrip()
-            body += f"\nSalini Sadangi\n+65 9357 4381 · {EMAIL}\nhttps://saliniportfolionextjs.vercel.app"
-            by = ai.used
-    to = job["contact_email"] or ""
-    mailto = f"mailto:{to}?" + urllib.parse.urlencode({"subject": subject, "body": body}, quote_via=urllib.parse.quote)
-    out = out_dir / f"Email_{slug(job['company'])}.txt"
-    out.write_text(f"To: {to or '[add recipient]'}\nSubject: {subject}\n\n{body}\n\n"
-                   f"---\nAttach: Salini_Sadangi_Resume.pdf" + (", CoverLetter PDF" if job["mode"] == "direct" else "") +
-                   f"\nOpen in your mail app (copy into the address bar):\n{mailto}\n", encoding="utf-8")
-    return out, by
+            subject, body, by = obj["subject"], obj["body"], ai.used
+    return write_email(job, out_dir, subject, body), by
 
 
 # --------------------------------------------------------------------------- tracker
@@ -644,6 +666,49 @@ def append_tracker(job: dict, variant: str, letter_rel: str, notes: str) -> str:
         r = subprocess.run([sys.executable, str(build)], capture_output=True, text=True, cwd=TRACKER_DIR)
         msg += "; tracker rebuilt" if r.returncode == 0 else f"; tracker rebuild failed (pip install openpyxl): {r.stderr.strip()[-120:]}"
     return msg
+
+
+def finish(job: dict, variant: str, ranked, out_dir: Path, chrome: str | None, resume_html: Path,
+           letter_html: Path, email_txt: Path, by: dict, log: list[str]) -> None:
+    """Shared tail: house-style audit, PDFs, notes.md, tracker row, console report."""
+    audit = []
+    letter_text = strip_tags(re.search(r'<div class="re">.*', letter_html.read_text(encoding="utf-8"), re.S).group(0))
+    email_text = email_txt.read_text(encoding="utf-8").split("---")[0]
+    for label, txt in (("cover letter", letter_text), ("email", email_text)):
+        if has_dash(txt):
+            audit.append(f"{label}: a dash survived, read it before sending")
+        if not re.search(r"immediate", txt, re.I):
+            audit.append(f"{label}: availability not stated as immediate")
+    if not audit:
+        audit.append("no dashes, availability immediate, numbers checked against facts.md")
+
+    say("Rendering PDFs..." if chrome else "Skipping PDFs (no Chrome).")
+    resume_pdf = html_to_pdf(chrome, resume_html)
+    letter_pdf = html_to_pdf(chrome, letter_html)
+
+    notes = (f"# {job['company']} · {job['role']}\n\nBuilt {dt.datetime.now():%Y-%m-%d %H:%M}\n\n"
+             f"- Variant: {variant} ({VARIANT_LABEL[variant]}); match scores: {ranked[:3]}\n"
+             f"- Summary by: {by['summary']} · Letter by: {by['letter']} · Email by: {by['email']}\n"
+             f"- Mode: {job['mode']}{' via ' + job['portal'] if job['portal'] else ''}; contact: {job['contact_name'] or 'n/a'} {job['contact_email']}\n"
+             f"- Tags: {', '.join(job['tags']) or 'none'}\n- URL: {job['url'] or 'n/a'}\n- Deadline: {job['deadline'] or 'n/a'}\n"
+             f"- Checks: {'; '.join(audit)}\n"
+             + ("- AI log:\n" + "".join(f"  - {l}\n" for l in log) if log else "")
+             + f"\n## Job description\n\n{job['jd'] or '(none pasted)'}\n")
+    (out_dir / "notes.md").write_text(notes, encoding="utf-8")
+    letter_rel = str((letter_pdf or letter_html).relative_to(ROOT))
+    tracker_msg = append_tracker(job, variant, letter_rel,
+                                 f"summary {by['summary']}, letter {by['letter']}, email {by['email']}")
+
+    print("\nDone.")
+    say(f"Folder: {out_dir.relative_to(ROOT)}")
+    for p in (resume_pdf or resume_html, letter_pdf or letter_html, email_txt, out_dir / "notes.md"):
+        say(f"  {p.name}")
+    say(f"Tracker: {tracker_msg}")
+    for a in audit:
+        say(f"Check: {a}")
+    if log:
+        say("AI: " + log[-1])
+    say("Read everything once before sending. The program does not send email.")
 
 
 # --------------------------------------------------------------------------- main
@@ -735,47 +800,8 @@ def main() -> int:
     say("Building email...")
     email_txt, email_by = build_email(job, out_dir, ai, facts, allowed)
 
-    # 7. house-style audit on the human-facing text
-    audit = []
-    letter_text = strip_tags(re.search(r'<div class="re">.*', letter_html.read_text(encoding="utf-8"), re.S).group(0))
-    email_text = email_txt.read_text(encoding="utf-8").split("---")[0]
-    for label, txt in (("cover letter", letter_text), ("email", email_text)):
-        if has_dash(txt):
-            audit.append(f"{label}: a dash survived, read it before sending")
-        if not re.search(r"immediate", txt, re.I):
-            audit.append(f"{label}: availability not stated as immediate")
-    if not audit:
-        audit.append("no dashes, availability immediate, numbers checked against facts.md")
-
-    # 8. PDFs
-    say("Rendering PDFs..." if chrome else "Skipping PDFs (no Chrome).")
-    resume_pdf = html_to_pdf(chrome, resume_html)
-    letter_pdf = html_to_pdf(chrome, letter_html)
-
-    # 9. notes + tracker
-    notes = (f"# {company} · {role}\n\nBuilt {dt.datetime.now():%Y-%m-%d %H:%M}\n\n"
-             f"- Variant: {variant} ({VARIANT_LABEL[variant]}); match scores: {ranked[:3]}\n"
-             f"- Summary by: {rinfo['summary_by']} · Letter by: {letter_by} · Email by: {email_by}\n"
-             f"- Mode: {mode}{' via ' + portal if portal else ''}; contact: {contact_name or 'n/a'} {contact_email}\n"
-             f"- Tags: {', '.join(tags) or 'none'}\n- URL: {url or 'n/a'}\n- Deadline: {deadline or 'n/a'}\n"
-             f"- Checks: {'; '.join(audit)}\n"
-             + ("- AI log:\n" + "".join(f"  - {l}\n" for l in log) if log else "")
-             + f"\n## Job description\n\n{jd or '(none pasted)'}\n")
-    (out_dir / "notes.md").write_text(notes, encoding="utf-8")
-    letter_rel = str((letter_pdf or letter_html).relative_to(ROOT))
-    tracker_msg = append_tracker(job, variant, letter_rel, f"built by apply.py; summary {rinfo['summary_by']}, letter {letter_by}, email {email_by}")
-
-    # 10. report
-    print("\nDone.")
-    say(f"Folder: {out_dir.relative_to(ROOT)}")
-    for p in (resume_pdf or resume_html, letter_pdf or letter_html, email_txt, out_dir / "notes.md"):
-        say(f"  {p.name}")
-    say(f"Tracker: {tracker_msg}")
-    for a in audit:
-        say(f"Check: {a}")
-    if log:
-        say("AI: " + log[-1])
-    say("Read everything once before sending. The program does not send email.")
+    finish(job, variant, ranked, out_dir, chrome, resume_html, letter_html, email_txt,
+           {"summary": rinfo["summary_by"], "letter": letter_by, "email": email_by}, log)
     return 0
 
 
